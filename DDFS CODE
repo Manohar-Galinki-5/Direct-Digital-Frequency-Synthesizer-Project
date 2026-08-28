@@ -1,0 +1,91 @@
+module ddfs_6(
+    input  wire        clk,
+    input  wire        reset,
+    input  wire [31:0] freq_word,
+    input  wire [7:0]  amplitude,
+    input  wire        mode_sel,
+    output reg  [11:0] dac_out
+);
+    localparam integer LUT_N = 1024;
+    real PI = 3.141592653589793;
+    reg  [31:0] phase = 32'd0;
+    wire [9:0]  lut_addr = phase[21:12];
+    reg  [11:0] rom [0:LUT_N-1];
+    integer i;
+    real rtmp;
+    reg  [11:0] sine_sample   = 12'd2048;
+    reg  [11:0] cosine_sample = 12'd2048;
+    reg  [11:0] selected_sample = 12'd2048;
+    reg  [23:0] mult_out = 24'd0;
+    reg  [15:0] filtered = 16'd2048;
+    reg  [15:0] shaped   = 16'd2048;
+    // ROM init
+    initial begin
+        for (i = 0; i < LUT_N; i = i + 1) begin
+            rtmp = $sin((2.0 * PI * i) / LUT_N);
+            rom[i] = 12'd2048 + $rtoi(rtmp * 2047.0);
+        end
+    end
+    always @(posedge clk) begin
+        sine_sample   <= rom[lut_addr];
+        cosine_sample <= rom[(lut_addr + 10'd256) & 10'h3FF];
+    end
+    always @(posedge clk) begin
+        if (reset)
+            phase <=32'd0;
+        else
+            phase <= phase + 0.001*freq_word;
+    end
+    always @(posedge clk)
+        selected_sample <= mode_sel ? sine_sample : cosine_sample;
+    always @(posedge clk)
+        mult_out <= selected_sample * amplitude;
+    always @(posedge clk) begin
+        filtered <= (mult_out[23:8] + filtered) >> 1;
+        shaped   <= filtered + 16'd11;
+    end
+    always @(posedge clk)
+        dac_out <= shaped[15:4];
+        //dac_out <= (selected_sample * amplitude) >> 6; // quick check
+endmodule
+
+
+
+TestBench Code:
+
+`timescale 1ns/1ps
+module tb_ddfs_6;
+    reg clk = 0;
+    reg reset;
+    reg [31:0] freq_word;
+    reg [7:0] amplitude;
+    reg mode_sel;
+    wire [11:0] dac_out;
+    ddfs_6 dut (
+        .clk(clk),
+        .reset(reset),
+        .freq_word(freq_word),
+        .amplitude(amplitude),
+        .mode_sel(mode_sel),
+        .dac_out(dac_out)
+    );
+    always #5 clk = ~clk; //10ns
+    initial begin
+        $dumpfile("ddfs_6.vcd");
+        $dumpvars(0, tb_ddfs_6);
+        reset = 1;
+        freq_word = 32'd214748;//5khz
+        amplitude = 8'd120;
+        mode_sel = 1;
+        #2000 mode_sel = 0;
+        #2000 amplitude = 8'd200;
+        #2000 reset = 0;
+        #1000 reset = 1;
+        #2000;
+        $finish;
+    end
+    initial begin
+        $monitor("t=%0t | reset=%b | mode=%b | dac=%h",
+                  $time, reset, mode_sel, dac_out);
+    end
+endmodule
